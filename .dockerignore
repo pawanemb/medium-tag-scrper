@@ -1,0 +1,29 @@
+# Git
+.git
+.gitignore
+
+# Environment files
+.env
+.env.production
+
+# Python cache files
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+
+# Logs and databases
+*.log
+*.sqlite3
+medium_articles.csv
+
+# Development and local files
+venv/
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Miscellaneous
+.DS_Store
+Thumbs.db

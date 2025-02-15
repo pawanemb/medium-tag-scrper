@@ -1,0 +1,13 @@
+requests>=2.31.0
+openai>=1.0.0
+flask
+flask-socketio
+eventlet
+pandas>=2.2.1
+# Proxy support requires Oxylabs credentials
+# Set OXYLABS_USERNAME and OXYLABS_PASSWORD environment variables
+beautifulsoup4==4.12.3
+python-dotenv
+tenacity==8.2.3
+groq==0.18.0
+gunicorn

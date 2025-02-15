@@ -1,0 +1,16 @@
+# Environment files
+.env
+
+# Python cache files
+__pycache__/
+*.pyc
+
+# Virtual environment
+venv/
+.venv/
+
+# CSV output files
+*.csv
+
+# Logs
+*.log
