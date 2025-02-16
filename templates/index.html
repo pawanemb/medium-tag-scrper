@@ -91,12 +91,20 @@
                 </div>
                 <div class="col-md-8">
                     <div id="csv-file-preview" class="card">
-                        <div class="card-header">CSV File Preview</div>
+                        <div class="card-header d-flex justify-content-between align-items-center">
+                            CSV File Preview
+                            <button id="download-csv-btn" class="btn btn-primary btn-sm" style="display:none;">
+                                <i class="bi bi-download"></i> Download CSV
+                            </button>
+                        </div>
                         <div class="card-body">
                             <table class="table table-striped" id="csv-preview-table">
                                 <thead id="csv-preview-headers"></thead>
                                 <tbody id="csv-preview-data"></tbody>
                             </table>
+                        </div>
+                        <div class="card-footer" id="csv-file-info">
+                            <p id="total-rows-info"></p>
                         </div>
                     </div>
                 </div>
@@ -268,6 +276,21 @@
                 .then(files => {
                     const csvFileList = document.getElementById('csv-file-list');
                     csvFileList.innerHTML = ''; // Clear previous list
+                    
+                    // Sort files by modification time (newest first)
+                    files.sort((a, b) => {
+                        // Extract timestamp from filename
+                        const getTimestamp = (filename) => {
+                            const match = filename.match(/(\d{8}_\d{6})/);
+                            return match ? match[1] : '';
+                        };
+                        
+                        const timestampA = getTimestamp(a);
+                        const timestampB = getTimestamp(b);
+                        
+                        return timestampB.localeCompare(timestampA);
+                    });
+                    
                     files.forEach(file => {
                         const fileButton = document.createElement('button');
                         fileButton.classList.add('list-group-item', 'list-group-item-action');
@@ -287,11 +310,13 @@
                 .then(data => {
                     const headersEl = document.getElementById('csv-preview-headers');
                     const dataEl = document.getElementById('csv-preview-data');
+                    const downloadBtn = document.getElementById('download-csv-btn');
+                    const totalRowsInfo = document.getElementById('total-rows-info');
                     
                     // Clear previous preview
                     headersEl.innerHTML = '';
                     dataEl.innerHTML = '';
-
+                    
                     // Create headers
                     const headerRow = document.createElement('tr');
                     data.columns.forEach(column => {
@@ -312,10 +337,14 @@
                         dataEl.appendChild(tr);
                     });
 
-                    // Optional: Show total rows
-                    const totalRowsInfo = document.createElement('p');
+                    // Update total rows info
                     totalRowsInfo.textContent = `Total Rows: ${data.total_rows}`;
-                    document.getElementById('csv-file-preview').appendChild(totalRowsInfo);
+                    
+                    // Setup download button
+                    downloadBtn.style.display = 'inline-block';
+                    downloadBtn.onclick = () => {
+                        window.location.href = `/download-csv/${encodeURIComponent(filename)}`;
+                    };
                 })
                 .catch(error => {
                     console.error('Error viewing CSV file:', error);
