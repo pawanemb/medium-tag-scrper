@@ -77,52 +77,20 @@ class MediumTagScraper:
             logger.error(f"Error loading tags: {e}")
             return []
 
-    def clean_html(self, html_content: str) -> str:
+    def clean_html(self, html_content: str):
         """
-        Clean and preprocess HTML content before sending to ChatGPT.
+        Return raw HTML content without any cleaning.
         
         Args:
-            html_content (str): Raw HTML content to clean
+            html_content (str): Raw HTML content
         
         Returns:
-            str: Cleaned and preprocessed HTML
+            str: Unmodified HTML content
         """
-        try:
-            # Parse the HTML
-            soup = BeautifulSoup(html_content, 'html.parser')
-            
-            # Remove script and style tags
-            for script in soup(["script", "style"]):
-                script.decompose()
-            
-            # Remove comments
-            for comment in soup.find_all(text=lambda text: isinstance(text, Comment)):
-                comment.extract()
-            
-            # Remove unnecessary attributes from tags
-            for tag in soup.find_all(True):
-                # Keep only essential attributes
-                keep_attrs = ['href', 'src', 'alt', 'title', 'class']
-                attrs = dict(tag.attrs)
-                for attr in attrs:
-                    if attr not in keep_attrs:
-                        del tag.attrs[attr]
-            
-            # Extract main content (adjust selector as needed)
-            main_content = soup.find('main') or soup.find('body') or soup
-            
-            # Convert to clean text, preserving some structure
-            clean_text = main_content.get_text(separator=' ', strip=True)
-            
-            # Limit text length to prevent 413 Payload Too Large error
-            max_length = 5000  # Adjust based on ChatGPT's token limits
-            clean_text = clean_text[:max_length]
-            
-            return clean_text
+        # Log the full HTML content for debugging
+        logger.info(f"Raw HTML content (length: {len(html_content)} chars)")
         
-        except Exception as e:
-            logger.error(f"HTML cleaning error: {e}")
-            return html_content  # Fallback to original content if cleaning fails
+        return html_content
 
     @retry(stop=stop_after_attempt(3), 
            wait=wait_exponential(multiplier=1, min=4, max=10))
@@ -151,22 +119,21 @@ class MediumTagScraper:
                     Extract article information STRICTLY following these rules:
                     1. Return a valid JSON object with a key "articles"
                     2. "articles" must be an array of article objects
-                    3. Each article object must have exactly these 4 keys: 
+                    3. Each article object must have exactly these 4 keys and make sure extract the right Title , url and claps: 
                        - "title": Article title (string, non-empty)
                        - "link": Full Medium article URL (string, valid URL)
                        - "claps": Number of claps (string, e.g. "1.2K")
                        - "tag": Tag of the article (string)
-                    4. Extract only recommended articles
-                    5. Maximum 20 articles
-                    6. If no articles found, return an empty articles array
+                    4. Extract all articles
+                    5. If no articles found, return an empty articles array
                     
                     Example output:
                     {
                         "articles": [
                             {
-                                "title": "Example Article",
-                                "link": "https://medium.com/example",
-                                "claps": "1.2K",
+                                "title": "AI makes you smarter, not lazier",
+                                "link": "https://medium.com/darius-foroux/ai-makes-you-smarter-not-lazier-75eb46976123",
+                                "claps": "351",
                                 "tag": "ai"
                             }
                         ]
