@@ -76,6 +76,29 @@ def download_csv():
         logger.error(f"Download error: {e}")
         return str(e), 500
 
+@app.route('/download-csv/<path:filename>')
+def download_specific_csv(filename):
+    """Download a specific CSV file."""
+    try:
+        # Ensure the filename is safe and exists
+        if not filename.endswith('.csv') or '..' in filename:
+            return jsonify({'error': 'Invalid filename'}), 400
+        
+        # Check if file exists
+        if not os.path.exists(filename):
+            return jsonify({'error': 'File not found'}), 404
+        
+        # Send the file for download
+        return send_file(
+            filename, 
+            mimetype='text/csv', 
+            as_attachment=True, 
+            download_name=filename
+        )
+    except Exception as e:
+        logger.error(f"Download error for {filename}: {e}")
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/stream-csv')
 def stream_csv():
     """Stream CSV data in real-time."""
