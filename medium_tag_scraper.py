@@ -10,6 +10,7 @@ from bs4 import BeautifulSoup, Comment
 from dotenv import load_dotenv
 from openai import OpenAI
 import random
+import csv
 
 # Configure logging
 logging.basicConfig(
@@ -294,54 +295,73 @@ class MediumTagScraper:
         except Exception as e:
             logger.error(f"Error in tag {tag} scraping: {e}")
 
-    def scrape_tags(self):
+    def scrape_tags(self, append_mode=False):
         """
-        Scrape articles for all specified tags and save to a single CSV.
-        Updates CSV after processing each tag.
+        Scrape articles for all loaded tags.
+        
+        :param append_mode: If True, append to existing CSV instead of overwriting
         """
-        # Clear the output CSV at the start of scraping
+        # Clear existing articles list if not in append mode
+        if not append_mode:
+            self.all_articles = []
+        
+        # Open CSV in appropriate mode
+        csv_mode = 'a' if append_mode else 'w'
+        
         try:
-            # Create an empty DataFrame with the correct columns
-            empty_df = pd.DataFrame(columns=['title', 'link', 'claps', 'tag'])
-            empty_df.to_csv(self.output_file, index=False)
-            logger.info(f"Cleared existing CSV: {self.output_file}")
+            with open(self.output_file, csv_mode, newline='', encoding='utf-8') as csvfile:
+                csv_writer = csv.writer(csvfile)
+                
+                # Write headers only if not in append mode
+                if not append_mode:
+                    csv_writer.writerow(['tag', 'title', 'link', 'claps'])
+                
+                # Process each tag
+                for tag in self.tags:
+                    logger.info(f"Fetching tag page: https://medium.com/tag/{tag}/recommended")
+                    
+                    # Fetch raw HTML
+                    raw_html = self.fetch_tag_page(tag)
+                    
+                    if not raw_html:
+                        logger.warning(f"No HTML content found for tag {tag}")
+                        continue
+                    
+                    # Save raw HTML for debugging
+                    raw_html_filename = f"{tag}_raw_page.html"
+                    with open(raw_html_filename, 'w', encoding='utf-8') as f:
+                        f.write(raw_html)
+                    
+                    logger.info(f"Saved raw HTML to {raw_html_filename}")
+                    logger.info(f"Sending HTML for tag {tag} to ChatGPT for processing")
+                    
+                    # Process HTML with ChatGPT
+                    articles = self.process_html_with_chatgpt(raw_html, tag)
+                    
+                    # Write articles to CSV
+                    for article in articles:
+                        csv_writer.writerow([
+                            article.get('tag', tag), 
+                            article.get('title', ''), 
+                            article.get('link', ''), 
+                            article.get('claps', '')
+                        ])
+                    
+                    # Append to all_articles list
+                    self.all_articles.extend(articles)
+                    
+                    logger.info(f"Appended {len(articles)} articles for tag {tag} to {self.output_file}")
+                    logger.info(f"Processed {len(articles)} articles for tag {tag}")
+                    
+                    # Optional: Pause between tag scraping to avoid rate limits
+                    time.sleep(random.uniform(1, 3))
+        
         except Exception as e:
-            logger.error(f"Error clearing CSV: {e}")
+            logger.error(f"Error during tag scraping: {e}")
         
-        # Reset the all_articles list to ensure clean start
-        self.all_articles = []
-        
-        for tag in self.tags:
-            try:
-                # Fetch HTML for the tag
-                html_content = self.fetch_tag_page(tag)
-                
-                # Process HTML with ChatGPT
-                logger.info(f"Sending HTML for tag {tag} to ChatGPT for processing")
-                tag_articles = self.process_html_with_chatgpt(html_content, tag)
-                
-                # Extend consolidated articles list
-                self.all_articles.extend(tag_articles)
-                
-                # Immediately update the CSV after processing each tag
-                if tag_articles:
-                    # Append new articles to the existing CSV
-                    current_df = pd.DataFrame(tag_articles)
-                    current_df.to_csv(self.output_file, mode='a', header=False, index=False)
-                    logger.info(f"Appended {len(tag_articles)} articles for tag {tag} to {self.output_file}")
-                
-                logger.info(f"Processed {len(tag_articles)} articles for tag {tag}")
-                
-            except Exception as e:
-                logger.error(f"Error processing tag {tag}: {e}")
-        
-        # Final logging
-        if self.all_articles:
+        finally:
             logger.info(f"Total articles scraped: {len(self.all_articles)}")
-        else:
-            logger.warning("No articles were scraped.")
-        
-        return self.all_articles
+            return self.all_articles
 
 def main():
     """

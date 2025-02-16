@@ -115,6 +115,72 @@ def get_status():
         'download_enabled': os.path.exists('medium_articles.csv') and os.path.getsize('medium_articles.csv') > 0
     })
 
+@app.route('/list-saved-files')
+def list_saved_files():
+    """List all saved CSV files in the downloads folder."""
+    try:
+        # Ensure downloads folder exists
+        os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
+        
+        # List CSV files in both downloads and root directory
+        csv_files = []
+        
+        # Check root directory
+        if os.path.exists('medium_articles.csv'):
+            csv_files.append({
+                'filename': 'medium_articles.csv',
+                'path': 'medium_articles.csv',
+                'size': os.path.getsize('medium_articles.csv'),
+                'created': os.path.getctime('medium_articles.csv')
+            })
+        
+        # Check downloads folder
+        for filename in os.listdir(DOWNLOAD_FOLDER):
+            if filename.endswith('.csv'):
+                filepath = os.path.join(DOWNLOAD_FOLDER, filename)
+                csv_files.append({
+                    'filename': filename,
+                    'path': filepath,
+                    'size': os.path.getsize(filepath),
+                    'created': os.path.getctime(filepath)
+                })
+        
+        # Sort files by creation time, most recent first
+        csv_files.sort(key=lambda x: x['created'], reverse=True)
+        
+        return jsonify(csv_files)
+    
+    except Exception as e:
+        logger.error(f"Error listing saved files: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/download-file/<path:filename>')
+def download_specific_file(filename):
+    """Download a specific CSV file."""
+    try:
+        # Check if file exists in downloads folder or root directory
+        if os.path.exists(filename):
+            return send_file(
+                filename, 
+                as_attachment=True, 
+                download_name=os.path.basename(filename)
+            )
+        
+        # Check in downloads folder
+        download_path = os.path.join(DOWNLOAD_FOLDER, filename)
+        if os.path.exists(download_path):
+            return send_file(
+                download_path, 
+                as_attachment=True, 
+                download_name=filename
+            )
+        
+        return "File not found", 404
+    
+    except Exception as e:
+        logger.error(f"Download error for {filename}: {e}")
+        return str(e), 500
+
 def update_row_count(force=False):
     """Update total rows in the CSV with rate limiting."""
     global TOTAL_ROWS, LAST_UPDATE_TIME, CURRENT_CSV_DATA
@@ -160,9 +226,12 @@ def scrape_medium_tags(max_articles_per_tag):
     global SCRAPING_IN_PROGRESS, TOTAL_ROWS, CURRENT_CSV_DATA
     
     try:
-        # Ensure clean start
-        if os.path.exists('medium_articles.csv'):
-            os.remove('medium_articles.csv')
+        # Instead of deleting, check if file exists and create if not
+        if not os.path.exists('medium_articles.csv'):
+            # Create an empty CSV with headers
+            with open('medium_articles.csv', 'w', newline='', encoding='utf-8') as csvfile:
+                csv_writer = csv.writer(csvfile)
+                csv_writer.writerow(['tag', 'title', 'link', 'claps'])  # Update headers as needed
         
         SCRAPING_IN_PROGRESS = True
         TOTAL_ROWS = 0
@@ -175,7 +244,7 @@ def scrape_medium_tags(max_articles_per_tag):
         
         # Initialize and run the scraper
         scraper = MediumTagScraper('tags/medium_tags.txt', max_articles_per_tag=max_articles_per_tag)
-        scraper.scrape_tags()
+        scraper.scrape_tags(append_mode=True)  # Add append_mode parameter
         
         # Final update
         update_row_count(force=True)
@@ -200,4 +269,4 @@ def handle_start_scraping(max_articles_per_tag):
         socketio.emit('scrape_status', {'status': 'already_running'})
 
 if __name__ == '__main__':
-    socketio.run(app, debug=True, host='0.0.0.0', port=5000)
+    socketio.run(app, debug=True)
