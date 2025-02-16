@@ -80,21 +80,6 @@
                 <tbody id="csv-rows"></tbody>
             </table>
         </div>
-
-        <div id="saved-files-section" class="mt-4">
-            <h3>Saved CSV Files</h3>
-            <table id="saved-files-table" class="table table-striped table-hover">
-                <thead>
-                    <tr>
-                        <th>Filename</th>
-                        <th>Size</th>
-                        <th>Created</th>
-                        <th>Actions</th>
-                    </tr>
-                </thead>
-                <tbody id="saved-files-list"></tbody>
-            </table>
-        </div>
     </div>
 
     <script>
@@ -253,75 +238,6 @@
             statusMessage.textContent = 'WebSocket connection error. Please refresh.';
             statusMessage.className = 'alert alert-danger';
             statusMessage.style.display = 'block';
-        });
-
-        // Function to fetch and display saved CSV files
-        function fetchSavedFiles() {
-            fetch('/list-saved-files')
-                .then(response => response.json())
-                .then(files => {
-                    const savedFilesList = document.getElementById('saved-files-list');
-                    savedFilesList.innerHTML = ''; // Clear existing list
-
-                    if (files.length === 0) {
-                        savedFilesList.innerHTML = '<tr><td colspan="4" class="text-center">No saved CSV files found.</td></tr>';
-                        return;
-                    }
-
-                    files.forEach(file => {
-                        const row = document.createElement('tr');
-                        
-                        // Convert size to human-readable format
-                        const formatFileSize = (bytes) => {
-                            if (bytes < 1024) return `${bytes} bytes`;
-                            if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(2)} KB`;
-                            return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
-                        };
-
-                        // Convert timestamp to human-readable date
-                        const formatDate = (timestamp) => {
-                            return new Date(timestamp * 1000).toLocaleString();
-                        };
-
-                        row.innerHTML = `
-                            <td>${file.filename}</td>
-                            <td>${formatFileSize(file.size)}</td>
-                            <td>${formatDate(file.created)}</td>
-                            <td>
-                                <button class="btn btn-sm btn-primary download-file-btn" 
-                                        data-filename="${file.filename}">
-                                    <i class="bi bi-download"></i> Download
-                                </button>
-                            </td>
-                        `;
-
-                        savedFilesList.appendChild(row);
-                    });
-
-                    // Add event listeners to download buttons
-                    document.querySelectorAll('.download-file-btn').forEach(btn => {
-                        btn.addEventListener('click', (event) => {
-                            const filename = event.currentTarget.dataset.filename;
-                            window.location.href = `/download-file/${encodeURIComponent(filename)}`;
-                        });
-                    });
-                })
-                .catch(error => {
-                    console.error('Error fetching saved files:', error);
-                });
-        }
-
-        // Fetch saved files on page load and after scraping
-        fetchSavedFiles();
-
-        // Modify existing socket events to refresh saved files
-        socket.on('scrape_status', (data) => {
-            // Existing code...
-
-            // Refresh saved files list after scraping completes
-            if (data.status === 'completed') {
-                fetchSavedFiles();
-            }
         });
     </script>
 </body>

@@ -10,6 +10,7 @@ import csv
 import io
 import shutil
 import uuid
+import json
 
 # Configure logging
 logging.basicConfig(
@@ -24,11 +25,56 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
 # Global variables to track scraping state
 SCRAPING_IN_PROGRESS = False
+SCRAPING_COMPLETED = False
 TOTAL_ROWS = 0
 LAST_UPDATE_TIME = 0
 UPDATE_INTERVAL = 2  # seconds between updates
 CURRENT_CSV_DATA = []
 DOWNLOAD_FOLDER = 'downloads'
+
+# State persistence file
+STATE_FILE = 'scraping_state.json'
+
+def save_scraping_state():
+    """Save the current scraping state to a persistent file."""
+    state = {
+        'scraping_in_progress': SCRAPING_IN_PROGRESS,
+        'scraping_completed': SCRAPING_COMPLETED,
+        'total_rows': TOTAL_ROWS
+    }
+    try:
+        with open(STATE_FILE, 'w') as f:
+            json.dump(state, f)
+        logger.info(f"Saved scraping state: {state}")
+    except Exception as e:
+        logger.error(f"Error saving scraping state: {e}")
+
+def load_scraping_state():
+    """Load the scraping state from the persistent file."""
+    global SCRAPING_IN_PROGRESS, SCRAPING_COMPLETED, TOTAL_ROWS
+    try:
+        if os.path.exists(STATE_FILE):
+            with open(STATE_FILE, 'r') as f:
+                state = json.load(f)
+            
+            # Restore state
+            SCRAPING_IN_PROGRESS = state.get('scraping_in_progress', False)
+            SCRAPING_COMPLETED = state.get('scraping_completed', False)
+            TOTAL_ROWS = state.get('total_rows', 0)
+            
+            logger.info(f"Loaded scraping state: {state}")
+            
+            # If scraping was in progress, restart it
+            if SCRAPING_IN_PROGRESS and not SCRAPING_COMPLETED:
+                logger.info("Resuming interrupted scraping process")
+                # You might want to add a method to resume scraping from where it left off
+                # For now, we'll just restart the scraping
+                threading.Thread(target=scrape_medium_tags, args=(10,)).start()  # Default 10 articles per tag
+    except Exception as e:
+        logger.error(f"Error loading scraping state: {e}")
+
+# Load state when the application starts
+load_scraping_state()
 
 # Ensure download folder exists
 os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
@@ -111,75 +157,10 @@ def get_status():
     """Get current scraping status."""
     return jsonify({
         'scraping_in_progress': SCRAPING_IN_PROGRESS,
+        'scraping_completed': SCRAPING_COMPLETED,
         'total_rows': TOTAL_ROWS,
         'download_enabled': os.path.exists('medium_articles.csv') and os.path.getsize('medium_articles.csv') > 0
     })
-
-@app.route('/list-saved-files')
-def list_saved_files():
-    """List all saved CSV files in the downloads folder."""
-    try:
-        # Ensure downloads folder exists
-        os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
-        
-        # List CSV files in both downloads and root directory
-        csv_files = []
-        
-        # Check root directory
-        if os.path.exists('medium_articles.csv'):
-            csv_files.append({
-                'filename': 'medium_articles.csv',
-                'path': 'medium_articles.csv',
-                'size': os.path.getsize('medium_articles.csv'),
-                'created': os.path.getctime('medium_articles.csv')
-            })
-        
-        # Check downloads folder
-        for filename in os.listdir(DOWNLOAD_FOLDER):
-            if filename.endswith('.csv'):
-                filepath = os.path.join(DOWNLOAD_FOLDER, filename)
-                csv_files.append({
-                    'filename': filename,
-                    'path': filepath,
-                    'size': os.path.getsize(filepath),
-                    'created': os.path.getctime(filepath)
-                })
-        
-        # Sort files by creation time, most recent first
-        csv_files.sort(key=lambda x: x['created'], reverse=True)
-        
-        return jsonify(csv_files)
-    
-    except Exception as e:
-        logger.error(f"Error listing saved files: {e}")
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/download-file/<path:filename>')
-def download_specific_file(filename):
-    """Download a specific CSV file."""
-    try:
-        # Check if file exists in downloads folder or root directory
-        if os.path.exists(filename):
-            return send_file(
-                filename, 
-                as_attachment=True, 
-                download_name=os.path.basename(filename)
-            )
-        
-        # Check in downloads folder
-        download_path = os.path.join(DOWNLOAD_FOLDER, filename)
-        if os.path.exists(download_path):
-            return send_file(
-                download_path, 
-                as_attachment=True, 
-                download_name=filename
-            )
-        
-        return "File not found", 404
-    
-    except Exception as e:
-        logger.error(f"Download error for {filename}: {e}")
-        return str(e), 500
 
 def update_row_count(force=False):
     """Update total rows in the CSV with rate limiting."""
@@ -210,6 +191,7 @@ def update_row_count(force=False):
                     'download_enabled': True
                 })
                 LAST_UPDATE_TIME = current_time
+                save_scraping_state()
     
     except Exception as e:
         logger.error(f"Error updating row count: {e}")
@@ -223,20 +205,29 @@ def periodic_row_update():
 
 def scrape_medium_tags(max_articles_per_tag):
     """Background thread for scraping Medium tags."""
-    global SCRAPING_IN_PROGRESS, TOTAL_ROWS, CURRENT_CSV_DATA
+    global SCRAPING_IN_PROGRESS, SCRAPING_COMPLETED, TOTAL_ROWS, CURRENT_CSV_DATA
     
     try:
-        # Instead of deleting, check if file exists and create if not
-        if not os.path.exists('medium_articles.csv'):
-            # Create an empty CSV with headers
-            with open('medium_articles.csv', 'w', newline='', encoding='utf-8') as csvfile:
-                csv_writer = csv.writer(csvfile)
-                csv_writer.writerow(['tag', 'title', 'link', 'claps'])  # Update headers as needed
+        # Check if CSV exists and has content
+        if os.path.exists('medium_articles.csv') and os.path.getsize('medium_articles.csv') > 0:
+            logger.info("Existing CSV found with data. Skipping scraping.")
+            socketio.emit('scrape_status', {'status': 'skipped', 'message': 'CSV already contains data'})
+            SCRAPING_COMPLETED = True
+            save_scraping_state()
+            return
+        
+        if SCRAPING_COMPLETED:
+            logger.info("Scraping has already been completed. Skipping scraping.")
+            socketio.emit('scrape_status', {'status': 'skipped', 'message': 'Scraping has already been completed'})
+            save_scraping_state()
+            return
         
         SCRAPING_IN_PROGRESS = True
+        SCRAPING_COMPLETED = False
         TOTAL_ROWS = 0
         CURRENT_CSV_DATA = []
         socketio.emit('scrape_status', {'status': 'started'})
+        save_scraping_state()
         
         # Start periodic row update
         update_thread = threading.Thread(target=periodic_row_update)
@@ -244,23 +235,33 @@ def scrape_medium_tags(max_articles_per_tag):
         
         # Initialize and run the scraper
         scraper = MediumTagScraper('tags/medium_tags.txt', max_articles_per_tag=max_articles_per_tag)
-        scraper.scrape_tags(append_mode=True)  # Add append_mode parameter
+        scraper.scrape_tags()
         
         # Final update
         update_row_count(force=True)
         socketio.emit('scrape_status', {'status': 'completed'})
+        SCRAPING_COMPLETED = True
+        save_scraping_state()
     
     except Exception as e:
         logger.error(f"Scraping error: {e}")
         socketio.emit('scrape_status', {'status': 'error', 'message': str(e)})
+        SCRAPING_IN_PROGRESS = False
+        save_scraping_state()
     
     finally:
         SCRAPING_IN_PROGRESS = False
+        save_scraping_state()
 
 @socketio.on('start_scraping')
 def handle_start_scraping(max_articles_per_tag):
     """Handle start scraping event from client."""
-    global SCRAPING_IN_PROGRESS
+    global SCRAPING_IN_PROGRESS, SCRAPING_COMPLETED
+    
+    if SCRAPING_COMPLETED:
+        socketio.emit('scrape_status', {'status': 'skipped', 'message': 'Scraping has already been completed'})
+        save_scraping_state()
+        return
     
     if not SCRAPING_IN_PROGRESS:
         # Start scraping in a background thread
@@ -269,4 +270,4 @@ def handle_start_scraping(max_articles_per_tag):
         socketio.emit('scrape_status', {'status': 'already_running'})
 
 if __name__ == '__main__':
-    socketio.run(app, debug=True)
+    socketio.run(app, debug=True, host='0.0.0.0', port=5000)
