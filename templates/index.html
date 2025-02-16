@@ -80,6 +80,28 @@
                 <tbody id="csv-rows"></tbody>
             </table>
         </div>
+
+        <div id="csv-files-section" class="mt-4">
+            <h3>Available CSV Files</h3>
+            <div class="row">
+                <div class="col-md-4">
+                    <div class="list-group" id="csv-file-list">
+                        <!-- CSV files will be dynamically populated here -->
+                    </div>
+                </div>
+                <div class="col-md-8">
+                    <div id="csv-file-preview" class="card">
+                        <div class="card-header">CSV File Preview</div>
+                        <div class="card-body">
+                            <table class="table table-striped" id="csv-preview-table">
+                                <thead id="csv-preview-headers"></thead>
+                                <tbody id="csv-preview-data"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 
     <script>
@@ -239,6 +261,69 @@
             statusMessage.className = 'alert alert-danger';
             statusMessage.style.display = 'block';
         });
+
+        function listCSVFiles() {
+            fetch('/list-csv')
+                .then(response => response.json())
+                .then(files => {
+                    const csvFileList = document.getElementById('csv-file-list');
+                    csvFileList.innerHTML = ''; // Clear previous list
+                    files.forEach(file => {
+                        const fileButton = document.createElement('button');
+                        fileButton.classList.add('list-group-item', 'list-group-item-action');
+                        fileButton.textContent = file;
+                        fileButton.onclick = () => viewCSVFile(file);
+                        csvFileList.appendChild(fileButton);
+                    });
+                })
+                .catch(error => {
+                    console.error('Error listing CSV files:', error);
+                });
+        }
+
+        function viewCSVFile(filename) {
+            fetch(`/view-csv/${filename}`)
+                .then(response => response.json())
+                .then(data => {
+                    const headersEl = document.getElementById('csv-preview-headers');
+                    const dataEl = document.getElementById('csv-preview-data');
+                    
+                    // Clear previous preview
+                    headersEl.innerHTML = '';
+                    dataEl.innerHTML = '';
+
+                    // Create headers
+                    const headerRow = document.createElement('tr');
+                    data.columns.forEach(column => {
+                        const th = document.createElement('th');
+                        th.textContent = column;
+                        headerRow.appendChild(th);
+                    });
+                    headersEl.appendChild(headerRow);
+
+                    // Add first 10 rows of data
+                    data.data.slice(0, 10).forEach(row => {
+                        const tr = document.createElement('tr');
+                        data.columns.forEach(column => {
+                            const td = document.createElement('td');
+                            td.textContent = row[column];
+                            tr.appendChild(td);
+                        });
+                        dataEl.appendChild(tr);
+                    });
+
+                    // Optional: Show total rows
+                    const totalRowsInfo = document.createElement('p');
+                    totalRowsInfo.textContent = `Total Rows: ${data.total_rows}`;
+                    document.getElementById('csv-file-preview').appendChild(totalRowsInfo);
+                })
+                .catch(error => {
+                    console.error('Error viewing CSV file:', error);
+                });
+        }
+
+        // Call listCSVFiles when the page loads
+        document.addEventListener('DOMContentLoaded', listCSVFiles);
     </script>
 </body>
 </html>

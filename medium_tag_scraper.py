@@ -10,7 +10,8 @@ from bs4 import BeautifulSoup, Comment
 from dotenv import load_dotenv
 from openai import OpenAI
 import random
-import argparse
+import uuid
+from datetime import datetime
 
 # Configure logging
 logging.basicConfig(
@@ -21,21 +22,27 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 class MediumTagScraper:
-    def __init__(self, tags_file='tags/medium_tags.txt', output_file='medium_articles.csv', max_articles_per_tag=10):
+    def __init__(self, tags_file='tags/medium_tags.txt', output_file=None, max_articles_per_tag=10):
         """
         Initialize the Medium Tag Scraper.
         
         :param tags_file: Path to the file containing Medium tags
-        :param output_file: Consolidated output CSV file
+        :param output_file: Optional custom output CSV file. If None, generates a unique filename
         :param max_articles_per_tag: Maximum number of articles to scrape per tag
         """
         load_dotenv()
         self.client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+        
+        # Generate a unique filename if not provided
+        if output_file is None:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            unique_id = str(uuid.uuid4())[:8]
+            output_file = f'medium_articles_{timestamp}_{unique_id}.csv'
+        
+        # Ensure the output is in the current directory
+        self.output_file = os.path.basename(output_file)
+        
         self.tags = self._load_tags(tags_file)
-        
-        # Generate a unique output filename if the file already exists
-        self.output_file = self._generate_unique_filename(output_file)
-        
         self.max_articles_per_tag = max_articles_per_tag
         self.all_articles = []  # Consolidated list of articles
         
@@ -54,6 +61,8 @@ class MediumTagScraper:
                 "Please set OXYLABS_USERNAME and OXYLABS_PASSWORD environment variables. "
                 "Scraping may fail without a valid proxy."
             )
+
+        logger.info(f"Initialized scraper. Output will be saved to: {self.output_file}")
 
     def _load_tags(self, tags_file):
         """
@@ -80,26 +89,6 @@ class MediumTagScraper:
         except Exception as e:
             logger.error(f"Error loading tags: {e}")
             return []
-
-    def _generate_unique_filename(self, base_filename):
-        """
-        Generate a unique filename if the file already exists.
-        
-        :param base_filename: Original filename
-        :return: Unique filename
-        """
-        if not os.path.exists(base_filename):
-            return base_filename
-        
-        # If file exists, create a new filename with parenthetical numbering
-        base, ext = os.path.splitext(base_filename)
-        counter = 1
-        while True:
-            new_filename = f"{base}({counter}){ext}"
-            if not os.path.exists(new_filename):
-                logger.info(f"Existing file found. Using unique filename: {new_filename}")
-                return new_filename
-            counter += 1
 
     def clean_html(self, html_content: str):
         """
@@ -225,7 +214,7 @@ class MediumTagScraper:
             logger.error(f"ChatGPT processing error for tag {tag}: {e}")
             return []
 
-    def fetch_tag_page(self, tag: str) -> str:
+    def _fetch_tag_page(self, tag: str) -> str:
         """
         Fetch the recommended page for a given Medium tag using a proxy.
         
@@ -258,14 +247,6 @@ class MediumTagScraper:
             )
             response.raise_for_status()
             
-            # Save raw HTML for debugging
-            raw_html_file = f"{tag}_raw_page.html"
-            with open(raw_html_file, 'w', encoding='utf-8') as f:
-                f.write(response.text)
-            
-            logger.info(f"Saved raw HTML to {raw_html_file}")
-            logger.debug(f"HTML Content Length: {len(response.text)} characters")
-            
             return response.text
         
         except requests.exceptions.RequestException as e:
@@ -275,150 +256,110 @@ class MediumTagScraper:
             logger.error(f"Unexpected error fetching tag page: {e}")
             raise
 
-    def scrape_tags(self):
+    def scrape_all_tags(self):
         """
-        Scrape articles for all loaded tags.
-        Always create a new CSV file and update incrementally.
+        Scrape articles for all specified tags and return a list of articles.
+        
+        :return: List of all scraped articles
         """
-        # Always generate a unique filename
-        self.output_file = self._generate_unique_filename(self.output_file)
+        # Reset the all_articles list to ensure clean start
+        self.all_articles = []
         
-        logger.info(f"Will save data to: {self.output_file}")
+        # Shuffle tags to distribute API calls
+        random.shuffle(self.tags)
         
-        # Ensure the directory exists
-        os.makedirs(os.path.dirname(self.output_file) or '.', exist_ok=True)
+        # Iterate through tags
+        for tag in self.tags:
+            try:
+                # Fetch and process articles for the current tag
+                tag_articles = self.scrape_tag(tag)
+                
+                # Add articles to the consolidated list
+                if tag_articles:
+                    self.all_articles.extend(tag_articles)
+                    
+                    # Save articles to CSV after processing each tag
+                    tag_articles_df = pd.DataFrame(tag_articles)
+                    self.save_articles(tag_articles)
+                    
+                    logger.info(f"Processed {len(tag_articles)} articles for tag {tag}")
+                
+                # Optional: Add a delay between tags to avoid rate limiting
+                time.sleep(random.uniform(1, 3))
+                
+            except Exception as e:
+                logger.error(f"Error scraping tag {tag}: {e}")
+                continue
         
-        # Create an empty CSV file to ensure it exists
+        logger.info(f"Total articles scraped: {len(self.all_articles)}")
+        return self.all_articles
+
+    def scrape_tag(self, tag, max_articles=None):
+        """
+        Scrape articles for a specific tag.
+        
+        :param tag: Tag to scrape articles for
+        :param max_articles: Maximum number of articles to scrape (defaults to self.max_articles_per_tag)
+        :return: List of articles for the tag
+        """
+        if max_articles is None:
+            max_articles = self.max_articles_per_tag
+        
+        logger.info(f"Fetching tag page: https://medium.com/tag/{tag}/recommended")
+        
         try:
-            with open(self.output_file, 'w', newline='', encoding='utf-8') as f:
-                f.write('')  # Create an empty file
-            logger.info(f"Created empty CSV file: {self.output_file}")
-        except Exception as e:
-            logger.error(f"Failed to create CSV file: {e}")
-            raise
+            # Fetch and save raw HTML
+            raw_html = self._fetch_tag_page(tag)
+            raw_html_filename = f"{tag}_raw_page.html"
+            with open(raw_html_filename, 'w', encoding='utf-8') as f:
+                f.write(raw_html)
+            logger.info(f"Saved raw HTML to {raw_html_filename}")
+            
+            # Process HTML with ChatGPT
+            logger.info(f"Sending HTML for tag {tag} to ChatGPT for processing")
+            logger.info(f"Raw HTML content (length: {len(raw_html)} chars)")
+            
+            # Use existing method to process HTML
+            tag_articles = self.process_html_with_chatgpt(raw_html, tag)
+            
+            # Limit articles if necessary
+            tag_articles = tag_articles[:max_articles]
+            
+            logger.info(f"Found {len(tag_articles)} valid articles for tag {tag}")
+            
+            return tag_articles
         
+        except Exception as e:
+            logger.error(f"Error scraping tag {tag}: {e}")
+            return []
+
+    def save_articles(self, articles):
+        """
+        Save articles to a CSV file with unique naming.
+        
+        :param articles: List of scraped articles
+        """
         try:
-            # Iterate through tags and scrape
-            for tag in self.tags:
-                logger.info(f"Fetching tag page: https://medium.com/tag/{tag}/recommended")
-                
-                # Save raw HTML for potential debugging
-                raw_html_filename = f"{tag}_raw_page.html"
-                
-                # Fetch and save raw HTML
-                try:
-                    # Use existing method to get and save raw HTML
-                    html_content = self.fetch_tag_page(tag)
-                    
-                    with open(raw_html_filename, 'w', encoding='utf-8') as f:
-                        f.write(html_content)
-                    
-                    logger.info(f"Saved raw HTML to {raw_html_filename}")
-                    
-                    # Process HTML with ChatGPT
-                    logger.info(f"Sending HTML for tag {tag} to ChatGPT for processing")
-                    tag_articles = self.process_html_with_chatgpt(html_content, tag)
-                    
-                    # Convert tag articles to DataFrame
-                    tag_df = pd.DataFrame(tag_articles)
-                    
-                    # Append articles to the CSV file for each tag
-                    if not tag_df.empty:
-                        # Use mode='a' (append) and header=False to add to existing file
-                        tag_df.to_csv(self.output_file, mode='a', header=not os.path.getsize(self.output_file), index=False)
-                        logger.info(f"Appended {len(tag_df)} articles from tag '{tag}' to {self.output_file}")
-                    
-                    # Optional: limit total articles
-                    if os.path.getsize(self.output_file) > self.max_articles_per_tag * len(self.tags) * 1000:  # rough size estimate
-                        break
-                
-                except Exception as tag_error:
-                    logger.error(f"Error processing tag {tag}: {tag_error}")
-        
-            # Verify file was created and has content
-            if os.path.exists(self.output_file):
-                file_size = os.path.getsize(self.output_file)
-                logger.info(f"Final CSV file size: {file_size} bytes")
-            else:
-                logger.warning(f"CSV file {self.output_file} was not created!")
-    
+            # Ensure no existing file is overwritten
+            articles_df = pd.DataFrame(articles)
+            articles_df.to_csv(self.output_file, mode='a', header=False, index=False)
+            logger.info(f"Articles saved to {self.output_file}")
+            return self.output_file
         except Exception as e:
-            logger.error(f"Scraping error: {e}")
+            logger.error(f"Error saving articles: {e}")
             raise
 
 def main():
     """
-    Main function to run the Medium Tag Scraper from the command line.
-    Supports various configuration options.
+    Main function to run the Medium Tag Scraper.
+    Supports up to 10 tags.
     """
-    parser = argparse.ArgumentParser(description='Medium Tag Scraper: Scrape articles from Medium by tags')
+    # Define a list of up to 10 tags to scrape
+    tags_file = 'tags/medium_tags.txt'
     
-    parser.add_argument(
-        '-t', '--tags-file', 
-        default='tags/medium_tags.txt', 
-        help='Path to file containing tags to scrape (default: tags/medium_tags.txt)'
-    )
-    parser.add_argument(
-        '-o', '--output-file', 
-        default='medium_articles.csv', 
-        help='Output CSV file path (default: medium_articles.csv)'
-    )
-    parser.add_argument(
-        '-m', '--max-articles', 
-        type=int, 
-        default=10, 
-        help='Maximum number of articles to scrape per tag (default: 10)'
-    )
-    parser.add_argument(
-        '-v', '--verbose', 
-        action='store_true', 
-        help='Enable verbose logging'
-    )
-    parser.add_argument(
-        '-f', '--force', 
-        action='store_true', 
-        help='Force scraping even if CSV already exists'
-    )
-    
-    # Parse arguments
-    args = parser.parse_args()
-    
-    # Configure logging based on verbosity
-    if args.verbose:
-        logging.getLogger().setLevel(logging.DEBUG)
-    
-    try:
-        # If force flag is set, modify the output filename to create a new file
-        output_file = args.output_file
-        if args.force:
-            base, ext = os.path.splitext(output_file)
-            output_file = f"{base}_forced{ext}"
-        
-        # Initialize and run the scraper
-        scraper = MediumTagScraper(
-            tags_file=args.tags_file, 
-            output_file=output_file, 
-            max_articles_per_tag=args.max_articles
-        )
-        
-        # Start scraping
-        logger.info(f"Starting scraping with configuration:")
-        logger.info(f"Tags file: {args.tags_file}")
-        logger.info(f"Output file: {output_file}")
-        logger.info(f"Max articles per tag: {args.max_articles}")
-        logger.info(f"Force scraping: {args.force}")
-        
-        scraper.scrape_tags()
-        
-        # Log completion
-        logger.info("Scraping completed successfully!")
-        print(f"Scraping completed. Articles saved to {output_file}")
-    
-    except Exception as e:
-        logger.error(f"Scraping failed: {e}")
-        print(f"Error: {e}")
-        import sys
-        sys.exit(1)
+    # Initialize and run the scraper
+    scraper = MediumTagScraper(tags_file)
+    scraper.scrape_all_tags()
 
 if __name__ == "__main__":
     main()
